@@ -11,7 +11,7 @@ Cmt = lpeg.Cmt
 
 
 
-debug = false
+debug = true
 
 
 
@@ -139,18 +139,19 @@ grammar = P({
     char_escape = P("\\") * R("\0\xFF") / function(x) return x:sub(2,-1) end,
     
     
-    register = C(V("regA") + V("regB") + V("regC") + V("regD")),
+    register = C(V("regA") + V("regB") + V("regC") + V("regD") + V("regS")),
     regA = P("A"),
     regB = P("B"),
     regC = P("C"),
     regD = P("D"),
+    regS = P("S"),
     
     name = (R("AZ") + R("az") + P("_") * (R("AZ") + R("az") + P("_") + R("09"))^0)^1,
     address = C(P("[") * ((P("0x") * (V("hex_digit")^1)) + (V("digit")^1)) * P("]")) + V("define_name"),
     
     
     comment = C(P(";")) * (P(1) - P("\n"))^0 * C(P("\n")) / function(x,y) return "[ID: comment]" end,
-
+    
     
     WS = P(" "),
     EOL = C(P("\n")),
@@ -165,6 +166,7 @@ reg = {
     C = 0,
     D = 0,
     S = #ram - 1,
+    PC = 0,
 }
 
 flags = {
@@ -198,6 +200,8 @@ function parser(tree)
     definetable = {}
     data_section = 0
     
+    exit = false
+    
     --<< function >>--
     
     
@@ -210,12 +214,14 @@ function parser(tree)
             return 2
         elseif name=="D" then
             return 3
+        elseif name=="S" then
+            return 4
         else
             return nil
         end
     end
     local function is_reg(name)
-        if name == "A" or name == "B" or name == "C" or name == "D" then
+        if name == "A" or name == "B" or name == "C" or name == "D" or name == "S" then
             return true
         else
             return false
@@ -230,6 +236,8 @@ function parser(tree)
             return reg.C
         elseif name=="D" then
             return reg.D
+        elseif name=="S" then
+            return reg.S
         else
             return nil
         end
@@ -239,6 +247,7 @@ function parser(tree)
         reg.B = reg.B & 0xFF
         reg.C = reg.C & 0xFF
         reg.D = reg.D & 0xFF
+        reg.S = reg.S & 0xFF
     end
     local function check_neg_flag(value)
         value = value & 0xFF
@@ -395,30 +404,37 @@ function parser(tree)
         end
     end
     
+    local function check_S()
+        reg.S = reg.S & 0xFF
+        if reg.S + 1 < #ram//1.58 then
+            print("ERROR: stack overflow")
+            exit = true
+        end
+    end
+    
     --<< MAIN >>--
     
     find_label()
     find_define()
     replace_define()
     
-    local i = 1
     local line = 0
-    while i <= #tree do
-        if tree[i] == "add" then
+    while reg.PC<= #tree do
+        if tree[reg.PC] == "add" then
             local x = 0
-            if type(tree[i+2])=="number" then
-                x = tree[i+2]
-            elseif is_reg(tree[i+2]) then
-                x = get_reg_value(tree[i+2])
-            elseif is_address(tree[i+1]) then
-                x = get_address_value(tree[i+1])
+            if type(tree[reg.PC+2])=="number" then
+                x = tree[reg.PC+2]
+            elseif is_reg(tree[reg.PC+2]) then
+                x = get_reg_value(tree[reg.PC+2])
+            elseif is_address(tree[reg.PC+1]) then
+                x = get_address_value(tree[reg.PC+1])
             else
                 print("ERROR: there's no value for add at line "..tostring(line))
                 break
             end
             
-            if is_reg(tree[i+1]) then
-                local n = get_reg(tree[i+1])
+            if is_reg(tree[reg.PC+1]) then
+                local n = get_reg(tree[reg.PC+1])
                 if n==0 then
                     check_o_flag_add(reg.A, x)
                     
@@ -447,31 +463,38 @@ function parser(tree)
                     check_carry_flag(reg.D)
                     check_neg_flag(reg.D)
                     check_zero_flag(reg.D)
+                elseif n==4 then
+                    check_o_flag_add(reg.S, x)
+                    
+                    reg.S = reg.S + x
+                    check_carry_flag(reg.S)
+                    check_neg_flag(reg.S)
+                    check_zero_flag(reg.S)
                 end
-            elseif is_address(tree[i+1]) then
-                local n = get_address(tree[i+1])
+            elseif is_address(tree[reg.PC+1]) then
+                local n = get_address(tree[reg.PC+1])
                 ram[n+1] = x
             else
                 print("ERROR: there's no target for add at line "..tostring(line))
                 break
             end
             
-            i = i + 2
-        elseif tree[i] == "sub" then
+           reg.PC=reg.PC+ 2
+        elseif tree[reg.PC] == "sub" then
             local x = 0
-            if type(tree[i+2])=="number" then
-                x = tree[i+2]
-            elseif is_reg(tree[i+2]) then
-                x = get_reg_value(tree[i+2])
-            elseif is_address(tree[i+1]) then
-                x = get_address_value(tree[i+1])
+            if type(tree[reg.PC+2])=="number" then
+                x = tree[reg.PC+2]
+            elseif is_reg(tree[reg.PC+2]) then
+                x = get_reg_value(tree[reg.PC+2])
+            elseif is_address(tree[reg.PC+1]) then
+                x = get_address_value(tree[reg.PC+1])
             else
                 print("ERROR: there's no value for sub at line "..tostring(line))
                 break
             end
             x = ((~x + 1) & 0xFF)
-            if is_reg(tree[i+1]) then
-                local n = get_reg(tree[i+1])
+            if is_reg(tree[reg.PC+1]) then
+                local n = get_reg(tree[reg.PC+1])
                 if n==0 then
                     check_o_flag_sub(reg.A, x)
                     
@@ -504,41 +527,49 @@ function parser(tree)
                     flags.C = ~flags.C & 1
                     check_neg_flag(reg.D)
                     check_zero_flag(reg.D)
+                elseif n==4 then
+                    check_o_flag_sub(reg.S, x)
+                    
+                    reg.S = reg.S + x
+                    check_carry_flag(reg.S)
+                    flags.C = ~flags.C & 1
+                    check_neg_flag(reg.S)
+                    check_zero_flag(reg.S)
                 end
-            elseif is_address(tree[i+1]) then
-                local n = get_address(tree[i+1])
+            elseif is_address(tree[reg.PC+1]) then
+                local n = get_address(tree[reg.PC+1])
                 ram[n+1] = x
             else
                 print("ERROR: there's no target for sub at line "..tostring(line))
                 break
             end
-            i = i + 2
-        elseif tree[i] == "mul" then
+           reg.PC=reg.PC+ 2
+        elseif tree[reg.PC] == "mul" then
             local x = 0
-            if type(tree[i+1])=="number" then
-                x = tree[i+1]
-            elseif is_reg(tree[i+1]) then
-                x = get_reg_value(tree[i+1])
-            elseif is_address(tree[i+1]) then
-                x = get_address_value(tree[i+1])
+            if type(tree[reg.PC+1])=="number" then
+                x = tree[reg.PC+1]
+            elseif is_reg(tree[reg.PC+1]) then
+                x = get_reg_value(tree[reg.PC+1])
+            elseif is_address(tree[reg.PC+1]) then
+                x = get_address_value(tree[reg.PC+1])
             else
                 print("ERROR: there's no value for mul at line "..tostring(line))
                 break
             end
             
             local y = 0
-            if type(tree[i+2])=="number" then
-                y = tree[i+2]
-            elseif is_reg(tree[i+2]) then
-                y = get_reg_value(tree[i+2])
+            if type(tree[reg.PC+2])=="number" then
+                y = tree[reg.PC+2]
+            elseif is_reg(tree[reg.PC+2]) then
+                y = get_reg_value(tree[reg.PC+2])
             else
                 print("ERROR: there's no value for mul at line "..tostring(line))
                 break
             end
             
             x = (x * y) & 0xFF
-            if is_reg(tree[i+1]) then
-                local n = get_reg(tree[i+1])
+            if is_reg(tree[reg.PC+1]) then
+                local n = get_reg(tree[reg.PC+1])
                 if n==0 then
                     reg.A = x
                     check_neg_flag(reg.A)
@@ -556,41 +587,41 @@ function parser(tree)
                     check_neg_flag(reg.D)
                     check_zero_flag(reg.D)
                 end
-            elseif is_address(tree[i+1]) then
-                local n = get_address(tree[i+1])
+            elseif is_address(tree[reg.PC+1]) then
+                local n = get_address(tree[reg.PC+1])
                 ram[n+1] = x
             else
                 print("ERROR: there's no target for mul at line "..tostring(line))
                 break
             end
             
-            i = i + 2
-        elseif tree[i] == "muh" then
+           reg.PC=reg.PC+ 2
+        elseif tree[reg.PC] == "muh" then
             local x = 0
-            if type(tree[i+1])=="number" then
-                x = tree[i+1]
-            elseif is_reg(tree[i+1]) then
-                x = get_reg_value(tree[i+1])
-            elseif is_address(tree[i+1]) then
-                x = get_address_value(tree[i+1])
+            if type(tree[reg.PC+1])=="number" then
+                x = tree[reg.PC+1]
+            elseif is_reg(tree[reg.PC+1]) then
+                x = get_reg_value(tree[reg.PC+1])
+            elseif is_address(tree[reg.PC+1]) then
+                x = get_address_value(tree[reg.PC+1])
             else
                 print("ERROR: there's no value for muh at line "..tostring(line))
                 break
             end
             
             local y = 0
-            if type(tree[i+2])=="number" then
-                y = tree[i+2]
-            elseif is_reg(tree[i+2]) then
-                y = get_reg_value(tree[i+2])
+            if type(tree[reg.PC+2])=="number" then
+                y = tree[reg.PC+2]
+            elseif is_reg(tree[reg.PC+2]) then
+                y = get_reg_value(tree[reg.PC+2])
             else
                 print("ERROR: there's no value for muh at line "..tostring(line))
                 break
             end
             
             x = (x * y) >> 8
-            if is_reg(tree[i+1]) then
-                local n = get_reg(tree[i+1])
+            if is_reg(tree[reg.PC+1]) then
+                local n = get_reg(tree[reg.PC+1])
                 if n==0 then
                     reg.A = x
                     check_neg_flag(reg.A)
@@ -608,33 +639,33 @@ function parser(tree)
                     check_neg_flag(reg.D)
                     check_zero_flag(reg.D)
                 end
-            elseif is_address(tree[i+1]) then
-                local n = get_address(tree[i+1])
+            elseif is_address(tree[reg.PC+1]) then
+                local n = get_address(tree[reg.PC+1])
                 ram[n+1] = x
             else
                 print("ERROR: there's no target for muh at line "..tostring(line))
                 break
             end
             
-            i = i + 2
-        elseif tree[i] == "div" then
+           reg.PC=reg.PC+ 2
+        elseif tree[reg.PC] == "div" then
             local x = 0
-            if type(tree[i+1])=="number" then
-                x = tree[i+1]
-            elseif is_reg(tree[i+1]) then
-                x = get_reg_value(tree[i+1])
-            elseif is_address(tree[i+1]) then
-                x = get_address_value(tree[i+1])
+            if type(tree[reg.PC+1])=="number" then
+                x = tree[reg.PC+1]
+            elseif is_reg(tree[reg.PC+1]) then
+                x = get_reg_value(tree[reg.PC+1])
+            elseif is_address(tree[reg.PC+1]) then
+                x = get_address_value(tree[reg.PC+1])
             else
                 print("ERROR: there's no value for div at line "..tostring(line))
                 break
             end
             
             local y = 0
-            if type(tree[i+2])=="number" then
-                y = tree[i+2]
-            elseif is_reg(tree[i+2]) then
-                y = get_reg_value(tree[i+2])
+            if type(tree[reg.PC+2])=="number" then
+                y = tree[reg.PC+2]
+            elseif is_reg(tree[reg.PC+2]) then
+                y = get_reg_value(tree[reg.PC+2])
             else
                 print("ERROR: there's no value for div at line "..tostring(line))
                 break
@@ -645,8 +676,8 @@ function parser(tree)
             end
             
             x = math.modf(x / y)
-            if is_reg(tree[i+1]) then
-                local n = get_reg(tree[i+1])
+            if is_reg(tree[reg.PC+1]) then
+                local n = get_reg(tree[reg.PC+1])
                 if n==0 then
                     reg.A = x
                     check_neg_flag(reg.A)
@@ -660,8 +691,8 @@ function parser(tree)
                     reg.D = x
                     check_neg_flag(reg.D)
                 end
-            elseif is_address(tree[i+1]) then
-                local n = get_address(tree[i+1])
+            elseif is_address(tree[reg.PC+1]) then
+                local n = get_address(tree[reg.PC+1])
                 ram[n+1] = x
             else
                 print("ERROR: there's no target for div at line "..tostring(line))
@@ -670,25 +701,25 @@ function parser(tree)
             
             
             
-            i = i + 2
-        elseif tree[i] == "mod" then
+           reg.PC=reg.PC+ 2
+        elseif tree[reg.PC] == "mod" then
             local x = 0
-            if type(tree[i+1])=="number" then
-                x = tree[i+1]
-            elseif is_reg(tree[i+1]) then
-                x = get_reg_value(tree[i+1])
-            elseif is_address(tree[i+1]) then
-                x = get_address_value(tree[i+1])
+            if type(tree[reg.PC+1])=="number" then
+                x = tree[reg.PC+1]
+            elseif is_reg(tree[reg.PC+1]) then
+                x = get_reg_value(tree[reg.PC+1])
+            elseif is_address(tree[reg.PC+1]) then
+                x = get_address_value(tree[reg.PC+1])
             else
                 print("ERROR: there's no value for mod at line "..tostring(line))
                 break
             end
             
             local y = 0
-            if type(tree[i+2])=="number" then
-                y = tree[i+2]
-            elseif is_reg(tree[i+2]) then
-                y = get_reg_value(tree[i+2])
+            if type(tree[reg.PC+2])=="number" then
+                y = tree[reg.PC+2]
+            elseif is_reg(tree[reg.PC+2]) then
+                y = get_reg_value(tree[reg.PC+2])
             else
                 print("ERROR: there's no value for mod at line "..tostring(line))
                 break
@@ -699,8 +730,8 @@ function parser(tree)
             end
             
             x = x % y
-            if is_reg(tree[i+1]) then
-                local n = get_reg(tree[i+1])
+            if is_reg(tree[reg.PC+1]) then
+                local n = get_reg(tree[reg.PC+1])
                 if n==0 then
                     reg.A = x
                     check_neg_flag(reg.A)
@@ -718,30 +749,30 @@ function parser(tree)
                     check_neg_flag(reg.D)
                     check_zero_flag(reg.D)
                 end
-            elseif is_address(tree[i+1]) then
-                local n = get_address(tree[i+1])
+            elseif is_address(tree[reg.PC+1]) then
+                local n = get_address(tree[reg.PC+1])
                 ram[n+1] = x
             else
                 print("ERROR: there's no target for mod at line "..tostring(line))
                 break
             end
             
-            i = i + 2
-        elseif tree[i] == "mov" then
+           reg.PC=reg.PC+ 2
+        elseif tree[reg.PC] == "mov" then
             local x = 0
-            if type(tree[i+2])=="number" then
-                x = tree[i+2]
-            elseif is_reg(tree[i+2]) then
-                x = get_reg_value(tree[i+2])
-            elseif is_address(tree[i+2]) then
-                x = get_address_value(tree[i+2])
+            if type(tree[reg.PC+2])=="number" then
+                x = tree[reg.PC+2]
+            elseif is_reg(tree[reg.PC+2]) then
+                x = get_reg_value(tree[reg.PC+2])
+            elseif is_address(tree[reg.PC+2]) then
+                x = get_address_value(tree[reg.PC+2])
             else
                 print("ERROR: there's no value for mov at line "..tostring(line))
                 break
             end
             
-            if is_reg(tree[i+1]) then
-                local n = get_reg(tree[i+1])
+            if is_reg(tree[reg.PC+1]) then
+                local n = get_reg(tree[reg.PC+1])
                 if n==0 then
                     reg.A = x
                     check_neg_flag(reg.A)
@@ -759,29 +790,29 @@ function parser(tree)
                     check_neg_flag(reg.D)
                     check_zero_flag(reg.D)
                 end
-            elseif is_address(tree[i+1]) then
-                local n = get_address(tree[i+1])
+            elseif is_address(tree[reg.PC+1]) then
+                local n = get_address(tree[reg.PC+1])
                 ram[n+1] = x
             else
                 print("ERROR: there's no target for mov at line "..tostring(line))
                 break
             end
-            i = i + 2
-        elseif tree[i] == "cmp" then
+           reg.PC=reg.PC+ 2
+        elseif tree[reg.PC] == "cmp" then
             local x = 0
-            if type(tree[i+1])=="number" then
-                x = tree[i+1]
-            elseif is_reg(tree[i+1]) then
-                x = get_reg_value(tree[i+1])
+            if type(tree[reg.PC+1])=="number" then
+                x = tree[reg.PC+1]
+            elseif is_reg(tree[reg.PC+1]) then
+                x = get_reg_value(tree[reg.PC+1])
             else
                 print("ERROR: there's no value for cmp at line "..tostring(line))
                 break
             end
             local y = 0
-            if type(tree[i+2])=="number" then
-                y = tree[i+2]
-            elseif is_reg(tree[i+2]) then
-                y = get_reg_value(tree[i+2])
+            if type(tree[reg.PC+2])=="number" then
+                y = tree[reg.PC+2]
+            elseif is_reg(tree[reg.PC+2]) then
+                y = get_reg_value(tree[reg.PC+2])
             else
                 print("ERROR: there's no value for cmp at line "..tostring(line))
                 break
@@ -796,76 +827,76 @@ function parser(tree)
             check_neg_flag(z)
             check_zero_flag(z)
             
-            i = i + 1
-        elseif tree[i] == "jmp" then
-            local label = tree[i+1]
+           reg.PC=reg.PC+ 1
+        elseif tree[reg.PC] == "jmp" then
+            local label = tree[reg.PC+1]
             for _,x in ipairs(jumptable) do
                 if label == x[1] then
-                    i = x[2]
+                   reg.PC= x[2]
                 end
             end
-        elseif tree[i] == "jeq" then
+        elseif tree[reg.PC] == "jeq" then
             if flags.Z == 1 then
-                local label = tree[i+1]
+                local label = tree[reg.PC+1]
                 for _,x in ipairs(jumptable) do
                     if label == x[1] then
-                        i = x[2]
+                       reg.PC= x[2]
                     end
                 end
             end
-        elseif tree[i] == "jne" then
+        elseif tree[reg.PC] == "jne" then
             if flags.Z == 0 then
-                local label = tree[i+1]
+                local label = tree[reg.PC+1]
                 for _,x in ipairs(jumptable) do
                     if label == x[1] then
-                        i = x[2]
+                       reg.PC= x[2]
                     end
                 end
             end
-        elseif tree[i] == "jgr" then
+        elseif tree[reg.PC] == "jgr" then
             if flags.Z == 0 and flags.C == 0 then
-                local label = tree[i+1]
+                local label = tree[reg.PC+1]
                 for _,x in ipairs(jumptable) do
                     if label == x[1] then
-                        i = x[2]
+                       reg.PC= x[2]
                     end
                 end
             end
-        elseif tree[i] == "jls" then
+        elseif tree[reg.PC] == "jls" then
             if flags.Z == 0 and flags.C == 1 then
-                local label = tree[i+1]
+                local label = tree[reg.PC+1]
                 for _,x in ipairs(jumptable) do
                     if label == x[1] then
-                        i = x[2]
+                       reg.PC= x[2]
                     end
                 end
             end
-        elseif tree[i] == "jgn" then
+        elseif tree[reg.PC] == "jgn" then
             if flags.Z == 0 and flags.N == flags.V then
-                local label = tree[i+1]
+                local label = tree[reg.PC+1]
                 for _,x in ipairs(jumptable) do
                     if label == x[1] then
-                        i = x[2]
+                       reg.PC= x[2]
                     end
                 end
             end
-        elseif tree[i] == "jln" then
+        elseif tree[reg.PC] == "jln" then
             if flags.Z == 0 and flags.C ~= flags.V then
-                local label = tree[i+1]
+                local label = tree[reg.PC+1]
                 for _,x in ipairs(jumptable) do
                     if label == x[1] then
-                        i = x[2]
+                       reg.PC= x[2]
                     end
                 end
             end
-        elseif tree[i] == "psh" then
+        elseif tree[reg.PC] == "psh" then
             local x = 0
-            if type(tree[i+1])=="number" then
-                x = tree[i+1]
-            elseif is_reg(tree[i+1]) then
-                x = get_reg_value(tree[i+1])
-            elseif is_address(tree[i+1]) then
-                x = get_address_value(tree[i+1])
+            if type(tree[reg.PC+1])=="number" then
+                x = tree[reg.PC+1]
+            elseif is_reg(tree[reg.PC+1]) then
+                x = get_reg_value(tree[reg.PC+1])
+            elseif is_address(tree[reg.PC+1]) then
+                x = get_address_value(tree[reg.PC+1])
             else
                 print("ERROR: there's no value for mov at line "..tostring(line))
                 break
@@ -879,11 +910,11 @@ function parser(tree)
 
             reg.S = reg.S - 1
             
-            i = i + 1
-        elseif tree[i] == "pop" then
+           reg.PC=reg.PC+ 1
+        elseif tree[reg.PC] == "pop" then
             local x = ram[reg.S + 1]
-            if is_reg(tree[i+1]) then
-                local n = get_reg(tree[i+1])
+            if is_reg(tree[reg.PC+1]) then
+                local n = get_reg(tree[reg.PC+1])
                 if n==0 then
                     reg.A = x
                 elseif n==1 then
@@ -893,8 +924,8 @@ function parser(tree)
                 elseif n==3 then
                     reg.D = x
                 end
-            elseif is_address(tree[i+1]) then
-                local n = get_address(tree[i+1])
+            elseif is_address(tree[reg.PC+1]) then
+                local n = get_address(tree[reg.PC+1])
                 ram[n+1] = x
             else
                 print("ERROR: there's no target for pop at line "..tostring(line))
@@ -906,9 +937,9 @@ function parser(tree)
                 print("ERROR: Stack underflow")
                 break
             end
-            i = i + 1
-        elseif tree[i] == "int" then
-            local cmd = tree[i+1]
+           reg.PC=reg.PC+ 1
+        elseif tree[reg.PC] == "int" then
+            local cmd = tree[reg.PC+1]
             if cmd == 0 then
                 break
             elseif cmd == 1 then
@@ -916,13 +947,13 @@ function parser(tree)
             elseif cmd == 2 then
                 reg.A = iot.input.char()
             end
-        elseif tree[i] == "jsr" then
-            if not tree[i+1] then
+        elseif tree[reg.PC] == "jsr" then
+            if not tree[reg.PC+1] then
                 print("ERROR: There's no label for jsr at col "..i)
                 break
             end
             
-            local label = tree[i+1]
+            local label = tree[reg.PC+1]
             local addr = 0
             for _,x in ipairs(jumptable) do
                 if label == x[1] then
@@ -941,20 +972,25 @@ function parser(tree)
 
             reg.S = reg.S - 1
             
-            i = addr
-        elseif tree[i] == "ret" then
+           reg.PC= addr
+        elseif tree[reg.PC] == "ret" then
             --<< pop >>--
-            i = ram[reg.S + 1]
+           reg.PC= ram[reg.S + 1]
             reg.S = reg.S + 1
             if reg.S > #ram - 1 then
                 print("ERROR: Stack underflow")
                 break
             end
-        elseif tree[i] == "\n" then
+        elseif tree[reg.PC] == "\n" then
             line = line + 1
         end
         valid_reg_value()
-        i = i + 1
+        check_S()
+        reg.PC=reg.PC+ 1
+        
+        if exit then
+            break
+        end
     end
 end
 
@@ -1042,6 +1078,7 @@ mov A, "s"
 int 1h
 mov A, "\n"
 int 1h
+
 int 0h
 ]]
 
@@ -1076,9 +1113,9 @@ if debug then
             for x = 1,mramx do
                 local z = (y - 1) * mramx + x
                 for i=1,3 - string.len(tostring(ram[z])) do io.write(" ") end
---                if reg.S + 1 == z then
---                    io.write(">")
---                end
+                if reg.S + 1 == z then
+                    io.write(">")
+                end
                 io.write(ram[z]..", ")
             end
             print("|")
