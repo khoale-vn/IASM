@@ -1,0 +1,32 @@
+
+jsr print
+
+
+
+int 0h
+
+print:
+mov A, H
+int 1h
+mov A, E
+int 1h
+mov A, L
+int 1h
+mov A, L
+int 1h
+mov A, O
+int 1h
+
+mov A, ex
+int 1h
+
+mov A, "\n"
+int 1h
+
+ret
+
+H db "H"
+E db "E"
+L db "L"
+O db "O"
+ex db "!"
