@@ -11,7 +11,7 @@ Cmt = lpeg.Cmt
 
 
 
-debug = true
+debug = false
 
 
 
@@ -24,7 +24,7 @@ function tonumber8bit(value)
     if number == nil then
         number = tonumber(value, 16)
         if number == nil and value:sub(-1,-1) == "h" then
-            number = tonumber(value:sub(-1,-1), 16)
+            number = tonumber(value:sub(1,-2), 16)
         end
     end
     
