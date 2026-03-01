@@ -1,7 +1,7 @@
 This is an simple asm interpreter
 It has:
   - Anything is 8-bit(RAM, Register, address,...)
-  - 4 Register:
+  - 6 Register:
      + A(Accumulator)
      + B
      + C
